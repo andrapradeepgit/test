@@ -1,0 +1,19 @@
+ case "*.dat"
+                set backup_params = `$script_dir/get_backup_params.csh $INPUT_DIR/$x`
+                if($status != 0) then
+                    echo "Failed fetching the params for $x - Exiting"
+                    exit(1)
+                endif
+                set backup_db = `echo $backup_params | cut -d',' -f1-2`
+                set params    = `echo $backup_params | cut -d',' -f3-`
+                echo "$x,$params" >> $main_dir/data.index
+                if ($backup_params != "") then
+                    echo "$backup_db" >> $main_dir/data.bkup
+                endif
+                echo "${dirnm},${bname}" >> $main_dir/source.index
+                mkdir -p release/$dirtr; cp -p $INPUT_DIR/$x release/$dirtr;    
+                grep "$x" $script_dir/dat.files > /dev/null
+                if ( $status != 0 ) then
+                    echo $x >> $script_dir/dat.files
+                endif
+                breaksw
