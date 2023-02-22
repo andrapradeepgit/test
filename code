@@ -1,1 +1,358 @@
-hi
+
+#!/bin/csh -f
+
+if ($#argv < 2)then
+   echo "Please enter options as below arg  "
+   echo "Say prepare_release.csh <rollback_option> <properties file path> "
+   exit(1)
+endif
+
+set rollback = $1
+set prop_path = $2
+
+echo $prop_path
+
+source $prop_path
+
+echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+echo "                  Properties"
+echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+echo " Input Directory  : $INPUT_DIR     "
+echo " Output Directory : $OUPUT_DIR     "
+echo " Release Number   : $RELEASE_NO    "
+echo " Release Type     : $RELEASE_TYPE  "
+echo " Release Dir.     : $DIR_NAME      "
+echo " Makeself         : $MAKESELF      " 
+echo ""
+echo ""
+
+
+set envirok = "y"
+
+while ("${envirok}" != "y")
+
+     echo -n "Do you want to create the release ? (y/n/q): "
+     set envirok = "y"
+     set envirok = `echo "${envirok}" | awk '{print tolower($1)}'`
+
+     if("${envirok}" == 'n' || "${envirok}" == 'q') then
+          echo "Exiting install ... "
+          echo
+          exit(1)
+     endif
+end
+
+umask 002
+
+set script_dir   = `pwd`
+set release_copy = "$HOME/copy_release.txt"
+set rel_dir      = "$OUPUT_DIR/$DIR_NAME"
+set tmpl_dir     = $script_dir/template
+
+if ( -d $rel_dir ) then
+   rm -rf $rel_dir
+endif
+
+mkdir -p ${rel_dir}
+cd ${rel_dir}
+cp -prf $tmpl_dir/install.csh $tmpl_dir/setup_config.csh $tmpl_dir/util $tmpl_dir/config $tmpl_dir/release .
+
+touch VERSION
+
+foreach rel (${RELEASE_NO})
+
+     set releasetag = "${rel}"
+     set files_list = "$HOME/${rel}.$$.files"
+
+     #remove already created files in tmpdir  (So that new one will be created)
+     rm -rf $tmpl_dir/release/versions/${releasetag}
+     rm -rf release/versions/${releasetag}
+
+     if (-f $files_list ) then
+        rm -rf $files_list
+     endif
+
+     set rcount =  `echo $releasetag:q | sed 's/\./ /g' | wc -w`
+     set rel_file = $tmpl_dir/release/RELEASEORDER
+
+     if ( $rcount > 4 ) then
+        set rel_file = $tmpl_dir/release/RELEASEORDER_PATCH
+     endif
+
+     if ( $UPDATE_RELORDER == 'Y' ) then
+
+        grep $releasetag $rel_file >& /dev/null
+   
+        if ($status != 0) then
+           echo "Updating $rel_file "
+           echo "$releasetag" >> $rel_file
+           cp -p $rel_file ./release/
+        else
+           echo "Release order is up-to-date with $releasetag"
+        endif
+     else
+        echo "Not updating $releasetag into $rel_file file"
+     endif
+
+     set main_dir = "release/versions/${releasetag}"
+     set xdb_dir  = "release/versions/X.X.XX.XX"
+     set roll_dir = "release/versions/9.9.99.99"
+     mkdir -p $main_dir
+
+     rm -rf ${release_copy}       
+     set replace_text = "$INPUT_DIR/"
+
+     find $INPUT_DIR -type f | sed "s|$replace_text||g" | grep -v deleted_files > ${release_copy}
+
+     #Copy the dependent files if the original files are changed (look at dependent.files)
+     foreach line (`cat $script_dir/dependent.files`)
+        set orig_file = `echo $line | cut -d, -f1`
+        set depd_file = `echo $line | cut -d, -f2`
+      
+        grep $orig_file ${release_copy} > /dev/null
+
+        if ($status == 0) then
+            grep $depd_file ${release_copy} > /dev/null
+            if($status != 0) then
+                 echo "Adding $depd_file as $orig_file in the release"
+                 echo $depd_file >> ${release_copy}
+            else
+                 echo "Both $depd_file and $orig_file in the release. So no need to add explicitly"
+            endif
+        endif
+     end
+
+     echo "${releasetag}" >> VERSION
+
+     echo "Copying git files"
+
+     cd $GIT_LOCAL_REPO
+     find . -type f | grep -v ISOMEMQ | grep -v JMSBridge | grep -v dpm_tools | grep -v mon_sys | grep -v '/source/' | grep -v '/jsource/' | grep -v '/data/' | grep -v '/include/' | grep -v '/nolib/' | grep -v '/makefiles/' | grep -v '/makefiles_linux/' | grep -v '/screen/' | grep -v 'Linux/' | grep -v '/.git/' > $files_list
+     cat $script_dir/dat.files >> $files_list
+     cpio -pdm ${rel_dir}/release < $files_list  
+
+     rm -rf $files_list
+
+     echo "Copy completed.."
+
+     cd $rel_dir
+     
+     touch $main_dir/config.index
+     touch $main_dir/jars.index  
+     touch $main_dir/exec.index  
+     touch $main_dir/source.index 
+     touch $main_dir/confile.index
+     touch $main_dir/data.index
+     touch $main_dir/object.index
+     touch $main_dir/upgrade.index
+     touch $main_dir/global.index
+     touch $main_dir/exec_install.index
+     touch $main_dir/data.bkup
+     touch $main_dir/object.bkup
+     touch $main_dir/upgrade.bkup
+     touch $main_dir/deleted.index
+     touch $main_dir/client_copy.index
+
+     echo "Making the .index files"
+     foreach x (`cat ${release_copy}`)
+        echo "Checking file : $x"
+        set bname = `basename $x`
+        set dirtr = `dirname $x`
+        set dirnm = `echo $dirtr | sed 's|/|,|'`
+
+        if ( $dirnm =~ "*,*" ) then
+           set dirnm = "${dirnm}"
+        else
+           set dirnm = "${dirnm},"
+        endif
+
+        switch($x)
+            case "*/pom.xml":
+                echo "Skpping file $x"
+                breaksw
+            case "*/bin/execute_build.csh":
+                echo "${dirnm},${bname}" >> $main_dir/config.index
+                echo "${dirnm},${bname}" >> $main_dir/exec_install.index
+                breaksw
+            case "client_specific/**":
+                set client_ref = `echo $dirtr | sed 's|client_specific/||' | cut -d'/' -f1`
+                set client_no  = $client_ref
+                grep "^${client_ref}" $script_dir/client_mapping.txt > /dev/null
+                if ( $status == 0 ) then
+                   set client_no  = `grep "^${client_ref}" $script_dir/client_mapping.txt | cut -d',' -f2`
+                endif            
+                set y = `echo $x | sed "s|client_specific/${client_ref}/||"`
+                set bname = `basename $y`
+                set dirtry = `dirname $y`
+                set dirnm = `echo $dirtry | sed 's|/|,|'`
+                echo "${client_no},${dirtr},${dirnm},${bname}" >> $main_dir/client_copy.index
+                breaksw
+            case "*.xml":
+            case "*.XML":
+            case "*.xsd":
+            case "*.cfg":
+            case "*.properties":
+            case "cron_scripts/*.conf":
+            case "cron_scripts/*.txt":
+            case "cron_scripts/*.dat":
+                echo "${dirnm},${bname}" >> $main_dir/config.index
+                breaksw
+            case "*.so":
+            case "*.php":
+            case "*/bin/*":
+            case "cron_scripts/*.csh":
+            case "cron_scripts/*.pl":
+                echo "${dirnm},${bname}" >> $main_dir/exec.index
+                breaksw
+            case "*.jar"
+                echo "${dirnm},${bname}" >> $main_dir/jars.index
+                breaksw
+            case "*.gob"
+                set backup_params = `$script_dir/get_backup_params.csh $INPUT_DIR/$x`
+                if($status != 0) then
+                    echo "Failed fetching the params for $x - Exiting"
+                    exit(1)
+                endif
+                set backup_db = `echo $backup_params | cut -d',' -f1-2`
+                set params    = `echo $backup_params | cut -d',' -f3-`
+                echo "$x,$params" >> $main_dir/global.index
+                echo "${dirnm},${bname}" >> $main_dir/source.index
+                breaksw
+            case "*.con"
+                echo "$x" >> $main_dir/confile.index
+                echo "${dirnm},${bname}" >> $main_dir/source.index
+                breaksw
+            case "*.up"
+                set backup_params = `$script_dir/get_backup_params.csh $INPUT_DIR/$x`
+                if($status != 0) then
+                    echo "Failed fetching the params for $x - Exiting"
+                    exit(1)
+                endif
+                set backup_db = `echo $backup_params | cut -d',' -f1-2`
+                set params    = `echo $backup_params | cut -d',' -f3-`
+                echo "$x,$params" >> $main_dir/upgrade.index
+                if ($backup_params != "") then
+                    echo "$backup_db" >> $main_dir/upgrade.bkup
+                endif
+                echo "${dirnm},${bname}" >> $main_dir/source.index
+                mkdir -p release/$dirtr; cp -p $INPUT_DIR/$x release/$dirtr;
+                breaksw
+            case "*.dat"
+                set backup_params = `$script_dir/get_backup_params.csh $INPUT_DIR/$x`
+                if($status != 0) then
+                    echo "Failed fetching the params for $x - Exiting"
+                    exit(1)
+                endif
+                set backup_db = `echo $backup_params | cut -d',' -f1-2`
+                set params    = `echo $backup_params | cut -d',' -f3-`
+                echo "$x,$params" >> $main_dir/data.index
+                if ($backup_params != "") then
+                    echo "$backup_db" >> $main_dir/data.bkup
+                endif
+                echo "${dirnm},${bname}" >> $main_dir/source.index
+                mkdir -p release/$dirtr; cp -p $INPUT_DIR/$x release/$dirtr;    
+                grep "$x" $script_dir/dat.files > /dev/null
+                if ( $status != 0 ) then
+                    echo $x >> $script_dir/dat.files
+                endif
+                breaksw
+            case "*.sp"
+            case "*.vw"
+            case "*.tr"
+                set backup_params = `$script_dir/get_backup_params.csh $INPUT_DIR/$x`
+                if($status != 0) then
+                    echo "Failed fetching the params for $x - Exiting"
+                    exit(1)
+                endif
+                set backup_db = `echo $backup_params | cut -d',' -f1-2`
+                set params    = `echo $backup_params | cut -d',' -f3-`
+                echo "$x,$params" >> $main_dir/object.index
+                if ($backup_params != "") then
+                    echo "$backup_db" >> $main_dir/object.bkup
+                endif
+                echo "${dirnm},${bname}" >> $main_dir/source.index
+                mkdir -p release/$dirtr; cp -p $INPUT_DIR/$x release/$dirtr;
+
+                set pcount = `echo $params | sed 's/,/ /g' | wc -w`
+                if ( $pcount > 1 ) then
+                    grep $x $xdb_dir/object.index > /dev/null
+                    if ( $status != 0 ) then
+                        echo "$x,$params" >> $xdb_dir/object.index
+                    endif
+                endif
+                breaksw
+             default:
+                echo "${dirnm},${bname}" >> $main_dir/source.index
+                mkdir -p release/$dirtr; cp -p $INPUT_DIR/$x release/$dirtr;
+        endsw
+     end
+
+     if ( -f $INPUT_DIR/deleted_files ) then
+          foreach x (`cat $INPUT_DIR/deleted_files`)
+
+              echo "Checkng deleted file : $x"
+              set bname = `basename $x`
+              set dirtr = `dirname $x`
+              set dirnm = `echo $dirtr | sed 's|/|,|'`
+
+              echo "${dirnm},${bname}" >> $main_dir/deleted.index
+
+              set dfiles = `grep $bname $roll_dir/*.* `
+              if ( "${dfiles}" != "" ) then
+                  echo "Removing $bname from files ( $dfiles ) "
+                  foreach dfile (`cat dfiles`)
+                      set dd_file = `basename $dilfe`
+                      set tf_file = "${dd_file}.tmp"
+                      grep -v $bname $roll_dir/${dd_file} > $roll_dir/${tf_file}
+                      rm $roll_dir/${dd_file}
+                      mv $roll_dir/${tf_file} $roll_dir/${dd_file}
+                  end
+                  echo "Removing $bname completed.."
+              endif
+
+          end
+     endif
+
+end
+
+cat VERSION
+
+echo "Updating the rollup package"
+set rollup_dir = "$main_dir/../9.9.99.99"
+
+set files_to_diff = (config.index jars.index exec.index source.index confile.index data.index \
+                     object.index upgrade.index global.index exec_install.index data.bkup \
+                     object.bkup upgrade.bkup deleted.index client_copy.index)
+
+foreach x ($files_to_diff)
+if ($x == "data.index")then
+#$script_dir/concheck.sh $main_dir/$x ${rel_dir}/
+$script_dir/datcheck.sh $main_dir/$x ${rel_dir}/ $script_dir
+endif
+
+
+    echo "Merging files $rollup_dir/$x $main_dir/$x"
+    cat $rollup_dir/$x $main_dir/$x  | sort | uniq > $rollup_dir/${x}.s
+    rm $rollup_dir/$x
+    mv $rollup_dir/${x}.s $rollup_dir/$x
+end
+
+echo "Merge complete"
+
+echo "Copying the current index files to Templates"
+cp -prf $main_dir $tmpl_dir/release/versions
+
+echo "Copying the rollup index files to Templates"
+cp -prf $rollup_dir $tmpl_dir/release/versions
+
+foreach f (`find release -type f | xargs grep -l | grep -v jar | grep -v "\.so" | grep -v bin`)
+   echo "Removing control-M chars in $f "
+   dos2unix $f $f
+end
+
+cd $OUPUT_DIR
+
+rm -rf $release_copy
+
+exit(0)
+
