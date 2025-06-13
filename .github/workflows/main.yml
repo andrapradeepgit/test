@@ -51,7 +51,7 @@ on:
 
 jobs:
   prebuild:
-    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/newdeployment') || inputs.entrypoint == 'deploy' || inputs.entrypoint == 'revert' }}
+    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.entrypoint == 'deploy' || inputs.entrypoint == 'revert' }}
     runs-on: ubuntu-latest
     container:
       image: localytics-docker.jfrog.io/terraform-builder:0.11.15-lypatch-2
